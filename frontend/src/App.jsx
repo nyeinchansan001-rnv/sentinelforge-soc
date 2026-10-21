@@ -20,7 +20,6 @@ import {
   Menu,
   MoreHorizontal,
   Network,
-  Play,
   RefreshCw,
   Search,
   Server,
@@ -34,40 +33,9 @@ import {
   Zap,
 } from 'lucide-react'
 
-const initialAlerts = [
-  {
-    id: 'SF-SSH-001',
-    title: 'SSH Brute Force Suspected',
-    source: '192.168.1.50',
-    target: 'ubuntu / SSH',
-    severity: 'High',
-    attempts: 5,
-    time: '10:04:00 UTC',
-    status: 'Investigating',
-  },
-  {
-    id: 'SF-AUTH-002',
-    title: 'Successful SSH Authentication',
-    source: '192.168.1.20',
-    target: 'ubuntu / SSH',
-    severity: 'Low',
-    attempts: 1,
-    time: '10:05:00 UTC',
-    status: 'Observed',
-  },
-  {
-    id: 'SF-SYS-003',
-    title: 'Authentication Log Review',
-    source: 'localhost',
-    target: 'linux-auth.log',
-    severity: 'Info',
-    attempts: 6,
-    time: '10:05:12 UTC',
-    status: 'Completed',
-  },
-]
-
 const activityBars = [30, 44, 35, 61, 48, 74, 46, 58, 39, 84, 52, 68, 45, 92, 60, 74, 43, 64, 35, 80, 55, 70, 48, 88, 58, 72, 40, 62, 35, 77, 51, 67, 42, 94, 61, 76, 46, 65, 38, 83, 54, 72, 45, 60, 36, 80, 52, 69]
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000')
+  .replace(/\/+$/, '')
 
 function MetricCard({ label, value, note, icon: Icon, accent, trend }) {
   return (
@@ -87,19 +55,31 @@ function MetricCard({ label, value, note, icon: Icon, accent, trend }) {
 
 function App() {
   const [activeNav, setActiveNav] = useState('Overview')
-  const [alerts, setAlerts] = useState(initialAlerts)
+  const [alerts, setAlerts] = useState([])
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
-  const [selectedAlert, setSelectedAlert] = useState(initialAlerts[0])
+  const [selectedAlert, setSelectedAlert] = useState(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [running, setRunning] = useState(false)
   const [aiReport, setAiReport] = useState(
     'Run an analysis to load the AI investigation report from your local SOC backend.',
   )
   const [apiStatus, setApiStatus] = useState('Demo data')
-  const [eventsCount, setEventsCount] = useState(6)
-  const [alertCount, setAlertCount] = useState(1)
+  const [eventsCount, setEventsCount] = useState(0)
+  const [alertCount, setAlertCount] = useState(0)
   const [lastRun, setLastRun] = useState('Not connected yet')
+  const [inputMode, setInputMode] = useState('sample')
+  const [scenario, setScenario] = useState('normal')
+  const [failedAttempts, setFailedAttempts] = useState(5)
+  const [sourceIp, setSourceIp] = useState('192.0.2.10')
+  const [intervalMinutes, setIntervalMinutes] = useState(5)
+  const [includeSuccess, setIncludeSuccess] = useState(false)
+  const [useAi, setUseAi] = useState(false)
+  const [previewLines, setPreviewLines] = useState([])
+  const [uploadFile, setUploadFile] = useState(null)
+  const [analysisData, setAnalysisData] = useState(null)
+  const [previousSummary, setPreviousSummary] = useState(null)
+  const [errorMessage, setErrorMessage] = useState('')
 
   const visibleAlerts = alerts.filter((alert) => {
     const matchesFilter = filter === 'All' || alert.severity === filter
@@ -109,22 +89,60 @@ function App() {
     return matchesFilter && matchesSearch
   })
 
+  function customPayload() {
+    return {
+      mode: 'custom',
+      failed_attempts: Number(failedAttempts),
+      source_ip: sourceIp,
+      interval_minutes: Number(intervalMinutes),
+      include_success: includeSuccess,
+      use_ai: useAi,
+    }
+  }
+
+  async function requestJson(url, options) {
+    const response = await fetch(url, options)
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.detail || `Backend returned HTTP ${response.status}`)
+    return data
+  }
+
   async function runAnalysis() {
     setRunning(true)
+    setErrorMessage('')
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ use_ai: true }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Backend returned HTTP ${response.status}`)
+      let data
+      if (inputMode === 'upload') {
+        if (!uploadFile) throw new Error('Choose a .log file to upload.')
+        if (!uploadFile.name.toLowerCase().endsWith('.log')) throw new Error('Only .log files are allowed.')
+        if (uploadFile.size > 1024 * 1024) throw new Error('Log files must be 1 MiB or smaller.')
+        data = await requestJson(`${apiBaseUrl}/api/analyze/upload?filename=${encodeURIComponent(uploadFile.name)}&use_ai=${useAi}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: uploadFile,
+        })
+      } else if (inputMode === 'custom') {
+        data = await requestJson(`${apiBaseUrl}/api/analyze`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(customPayload()),
+        })
+      } else {
+        data = await requestJson(`${apiBaseUrl}/api/analyze`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: inputMode, scenario, use_ai: useAi }),
+        })
       }
 
-      const data = await response.json()
       const detected = data.alerts ?? []
+      if (analysisData) {
+        setPreviousSummary({
+          events: analysisData.events_processed,
+          alerts: analysisData.alerts_generated,
+          origin: analysisData.data_origin,
+        })
+      }
 
+      setAnalysisData(data)
       setEventsCount(data.events_processed ?? 0)
       setAlertCount(data.alerts_generated ?? detected.length)
       setApiStatus('Connected')
@@ -161,20 +179,34 @@ function App() {
         })
         setAiReport(
           detected[0].ai_investigation ||
-          detected[0].ai_investigation_error ||
-          'No AI investigation report was returned.',
+          (detected[0].ai_investigation_error
+            ? `AI unavailable: ${detected[0].ai_investigation_error}\n\nDetection results are still available below.`
+            : 'AI investigation was not requested. Detection results are available below.'),
         )
       } else {
         setSelectedAlert(null)
-        setAiReport('Analysis completed. No alerts were detected in the current log sample.')
+        setAiReport(data.ai_enabled
+          ? 'Analysis completed. No alerts were detected in this input.'
+          : 'AI investigation was not requested. Detection results are available below.')
       }
     } catch (error) {
       setApiStatus('Offline')
-      setAiReport(
-        `Could not connect to the backend: ${error.message}. Start FastAPI at http://127.0.0.1:8000 and try again.`,
-      )
+      setErrorMessage(error.message)
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function previewCustomLogs() {
+    setErrorMessage('')
+    try {
+      const data = await requestJson(`${apiBaseUrl}/api/logs/preview`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customPayload()),
+      })
+      setPreviewLines(data.lines)
+    } catch (error) {
+      setErrorMessage(error.message)
     }
   }
 
@@ -198,7 +230,7 @@ function App() {
           <ChevronDown size={15} className="muted-icon" />
         </button>
 
-        <div className="nav-section-label">MONITOR</div>
+        <div className="nav-section-label">OPERATIONS</div>
         <nav className="nav-list">
           {[
             { label: 'Overview', icon: LayoutDashboard },
@@ -264,10 +296,6 @@ function App() {
             </div>
             <div className="heading-actions">
               <button className="button-secondary" onClick={() => { setFilter('All'); setSearch('') }}><RefreshCw size={15} /> Reset filters</button>
-              <button className="button-primary" onClick={runAnalysis} disabled={running}>
-                {running ? <RefreshCw className="spin" size={16} /> : <Play size={15} fill="currentColor" />}
-                {running ? 'Analyzing logs…' : 'Run analysis'}
-              </button>
             </div>
           </section>
 
@@ -284,6 +312,48 @@ function App() {
             <MetricCard label="High severity" value={alerts.filter((alert) => alert.severity === 'High').length.toLocaleString()} note="Require analyst review" icon={AlertTriangle} accent="accent-amber" />
             <MetricCard label="AI investigations" value={alerts.filter((alert) => alert.raw?.ai_investigation).length.toLocaleString()} note="Reports returned by local AI" icon={BrainCircuit} accent="accent-violet" />
           </section>
+
+          <section className="panel lab-panel">
+            <div className="panel-heading"><div><span className="section-kicker">INPUT</span><h2>Interactive log analysis</h2><p>Choose a source and run the existing Linux authentication pipeline.</p></div><span className={`origin-badge ${analysisData?.data_origin === 'uploaded' ? 'uploaded' : ''}`}>{analysisData?.data_origin === 'uploaded' ? 'UPLOADED DATA' : 'SYNTHETIC DEMO'}</span></div>
+            <div className="lab-mode-tabs" aria-label="Log input mode">
+              {[['sample', 'Sample log'], ['scenario', 'Scenarios'], ['custom', 'Custom builder'], ['upload', 'Upload log']].map(([mode, label]) => <button key={mode} className={inputMode === mode ? 'active' : ''} onClick={() => { setInputMode(mode); setErrorMessage('') }}>{label}</button>)}
+            </div>
+            {inputMode === 'sample' && <p className="lab-hint">Uses the bundled Linux authentication demonstration log.</p>}
+            {inputMode === 'scenario' && <div className="lab-form-row"><label>Scenario<select value={scenario} onChange={(event) => setScenario(event.target.value)}><option value="normal">Normal login activity</option><option value="failures">Repeated failed SSH logins</option><option value="success_after_failures">Failures followed by a successful login</option></select></label><p className="lab-hint">Scenarios are synthetic demonstrations. Analysis results come from the backend.</p></div>}
+            {inputMode === 'custom' && <>
+              <div className="lab-form-row">
+                <label>Failed SSH attempts<input type="number" min="0" max="20" value={failedAttempts} onChange={(event) => setFailedAttempts(event.target.value)} /></label>
+                <label>Source IP<select value={sourceIp} onChange={(event) => setSourceIp(event.target.value)}><option>192.0.2.10</option><option>198.51.100.25</option><option>203.0.113.50</option><option>10.0.0.10</option><option>192.168.1.50</option></select></label>
+                <label>Time interval (minutes)<input type="number" min="1" max="30" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>
+                <label className="lab-checkbox"><input type="checkbox" checked={includeSuccess} onChange={(event) => setIncludeSuccess(event.target.checked)} /> Include successful login</label>
+              </div>
+              <div className="lab-inline-actions"><button className="button-secondary" onClick={previewCustomLogs}>Preview generated lines</button><span>Synthetic lines parsed by the backend.</span></div>
+              {previewLines.length > 0 && <pre className="log-preview">{previewLines.join('\n')}</pre>}
+            </>}
+            {inputMode === 'upload' && <div className="lab-upload"><label>Select Linux auth log (.log, max 1 MiB)<input type="file" accept=".log,text/plain" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} /></label><span>{uploadFile ? `${uploadFile.name} · ${(uploadFile.size / 1024).toFixed(1)} KiB` : 'File is analyzed in memory and not saved to disk.'}</span></div>}
+            <div className="lab-run-row"><span className="section-kicker">ANALYSIS</span><label className="lab-checkbox"><input type="checkbox" checked={useAi} onChange={(event) => setUseAi(event.target.checked)} /> Optional AI report</label><button className="button-primary" onClick={runAnalysis} disabled={running}>{running ? 'Analyzing…' : 'Analyze input'}</button></div>
+            {errorMessage && <div className="lab-error" role="alert">{errorMessage}</div>}
+          </section>
+
+          {analysisData && <section className="panel learning-panel">
+            <div className="panel-heading"><div><span className="section-kicker">RESULTS</span><h2>Analysis evidence &amp; learning notes</h2><p>{analysisData.data_origin === 'uploaded' ? 'Uploaded log data' : analysisData.data_origin === 'sample' ? 'Bundled sample log' : 'Synthetic demonstration data'} · {analysisData.events_processed} parsed events · {analysisData.alerts_generated} alerts{analysisData.ignored_lines > 0 ? ` · ${analysisData.ignored_lines} ignored line(s)` : ''}</p></div><span className={`origin-badge ${analysisData.data_origin === 'uploaded' ? 'uploaded' : ''}`}>{analysisData.data_origin === 'uploaded' ? 'UPLOADED' : analysisData.data_origin === 'sample' ? 'SAMPLE' : 'SYNTHETIC'}</span></div>
+            {previousSummary && <div className="comparison-note"><strong>Before / after</strong><span>Previous: {previousSummary.events} events, {previousSummary.alerts} alerts ({previousSummary.origin})</span><ArrowDownRight size={15} /><span>Current: {analysisData.events_processed} events, {analysisData.alerts_generated} alerts ({analysisData.data_origin})</span></div>}
+            <div className="rule-explainer"><strong>Rule SF-SSH-001</strong><span>{analysisData.rule_explanation?.summary ?? 'At least 5 failed SSH logins from one source IP within 5 minutes trigger a high severity alert.'}</span></div>
+            {analysisData.alerts.length === 0 && <div className="rule-outcome"><strong>No alert triggered.</strong><span>The detection engine found no source IP with 5 failed SSH logins in one 5-minute window. Observed failed-login evidence by source:</span>{analysisData.failed_event_summary.length === 0 ? <span> None in the parsed events.</span> : analysisData.failed_event_summary.map((summary) => <span key={summary.source_ip}><code>{summary.source_ip}</code>: {summary.failed_attempts} total; maximum in any 5-minute window: {summary.maximum_in_five_minute_window} ({new Date(summary.first_seen).toLocaleTimeString()}–{new Date(summary.last_seen).toLocaleTimeString()}).</span>)}<span>This is an absence of a matching pattern in the parsed input, not proof that the system is safe.</span></div>}
+            {analysisData.alerts.map((alert) => {
+              const relatedEvents = analysisData.events.filter((event) => event.source_ip === alert.source_ip && event.timestamp >= alert.first_seen && event.timestamp <= alert.last_seen)
+              const evidence = relatedEvents.filter((event) => event.event_type === 'ssh_login_failed')
+              return <div className="evidence-card" key={`${alert.rule_id}-${alert.source_ip}`}>
+                <div className="evidence-heading"><strong>{alert.alert_type.replaceAll('_', ' ')}</strong><span className={`severity-badge ${alert.severity.toLowerCase()}`}>{alert.severity}</span></div>
+                <p><strong>Observed evidence:</strong> {evidence.length} failed SSH login event(s) from <code>{alert.source_ip}</code>, {new Date(alert.first_seen).toLocaleString()} – {new Date(alert.last_seen).toLocaleString()} ({alert.window_minutes}-minute rule window).</p>
+                <p><strong>Possible interpretation:</strong> Repeated failures may indicate password guessing or misconfigured automation. They are suspicious evidence, not proof of a successful compromise. {relatedEvents.some((event) => event.event_type === 'ssh_login_success') ? 'A successful login is also visible in the same source time range; its relationship to the failures needs investigation.' : 'This alert alone does not establish that any login succeeded.'}</p>
+                <div className="evidence-timeline">{relatedEvents.map((event, index) => <div key={`${event.timestamp}-${index}`}><time>{new Date(event.timestamp).toLocaleTimeString()}</time><span>{event.event_type.replaceAll('_', ' ')}</span><code>{event.username} · {event.source_ip}</code></div>)}</div>
+              </div>
+            })}
+            <div className="event-timeline-heading">Parsed event timeline</div>
+            <div className="evidence-timeline all-events">{analysisData.events.map((event, index) => <div key={`${event.timestamp}-${index}`}><time>{new Date(event.timestamp).toLocaleString()}</time><span>{event.event_type.replaceAll('_', ' ')}</span><code>{event.username} · {event.source_ip}</code></div>)}</div>
+            {analysisData.alerts.some((alert) => alert.ai_investigation_error) && <p className="ai-unavailable">AI unavailable: {analysisData.alerts.find((alert) => alert.ai_investigation_error).ai_investigation_error} Detection results remain available.</p>}
+          </section>}
 
           <section className="dashboard-grid">
             <div className="panel activity-panel">
