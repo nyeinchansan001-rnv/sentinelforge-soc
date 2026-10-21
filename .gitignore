@@ -1,0 +1,33 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test and coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+.next/
+
+# Operating system and editor files
+.DS_Store
+.vscode/
+
+# Logs
+*.log
+!sample_logs/*.log
