@@ -3,11 +3,33 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.api import app
+from app.api import LOCAL_FRONTEND_ORIGINS, app, get_frontend_origins
 
 
 client = TestClient(app)
 SAMPLE_LOG_DIR = Path(__file__).resolve().parents[2] / "sample_logs"
+
+
+def test_frontend_origins_include_local_and_configured_origins(monkeypatch):
+    monkeypatch.setenv(
+        "FRONTEND_ORIGINS",
+        " https://sentinelforge.example , https://admin.example/ ,https://sentinelforge.example ",
+    )
+
+    origins = get_frontend_origins()
+
+    assert origins == [
+        *LOCAL_FRONTEND_ORIGINS,
+        "https://sentinelforge.example",
+        "https://admin.example",
+    ]
+    assert "*" not in origins
+
+
+def test_frontend_origins_default_to_localhost(monkeypatch):
+    monkeypatch.delenv("FRONTEND_ORIGINS", raising=False)
+
+    assert get_frontend_origins() == list(LOCAL_FRONTEND_ORIGINS)
 
 
 def test_health_check_is_online():

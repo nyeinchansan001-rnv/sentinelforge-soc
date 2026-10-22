@@ -120,7 +120,7 @@ def test_upload_enforces_line_limit():
 
 def test_ai_failure_preserves_detection_results(monkeypatch):
     def fail_ai(alert):
-        raise RuntimeError("Ollama is unavailable")
+        raise ValueError("Ollama returned an invalid response")
 
     monkeypatch.setattr(pipeline, "investigate_alert", fail_ai)
     response = client.post("/api/analyze", json={
@@ -133,4 +133,4 @@ def test_ai_failure_preserves_detection_results(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["alerts_generated"] == 1
-    assert body["alerts"][0]["ai_investigation_error"] == "Ollama is unavailable"
+    assert body["alerts"][0]["ai_investigation_error"] == "Ollama returned an invalid response"

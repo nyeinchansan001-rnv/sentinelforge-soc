@@ -77,8 +77,10 @@ def run_pipeline_lines(lines, use_ai: bool = False) -> dict:
         if use_ai:
             try:
                 alert["ai_investigation"] = investigate_alert(alert)
-            except (RuntimeError, TimeoutError) as exc:
-                alert["ai_investigation_error"] = str(exc)
+            except Exception as exc:
+                # AI is an optional enhancement; preserve rule detections if
+                # Ollama is absent or returns an unexpected response.
+                alert["ai_investigation_error"] = str(exc) or exc.__class__.__name__
 
     return {
         "events_processed": len(events),
